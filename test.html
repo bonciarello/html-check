@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test — Validatore HTML</title>
+  <style>
+    :root {
+      --ok: #1B8368;
+      --fail: #D64045;
+      --bg: #FEFCFA;
+      --text: #1E1B18;
+    }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 24px auto;
+      background: var(--bg);
+      color: var(--text);
+      padding: 0 16px;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 8px; }
+    .summary { font-size: 1.1rem; margin-bottom: 16px; }
+    .test-case {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+    }
+    .test-case.pass { border-left: 4px solid var(--ok); }
+    .test-case.fail { border-left: 4px solid var(--fail); }
+    .test-case h3 { margin: 0 0 4px; font-size: 1rem; }
+    .test-case .result { font-weight: 600; }
+    .test-case .result.pass { color: var(--ok); }
+    .test-case .result.fail { color: var(--fail); }
+    .test-case .details { font-size: 0.9rem; color: #6B6154; margin-top: 4px; }
+    pre { background: #F5F2EE; padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Test — Validatore HTML</h1>
+  <p class="summary" id="summary">Esecuzione in corso…</p>
+  <div id="results"></div>
+
+  <script src="js/validator.js"></script>
+  <script>
+    const V = window.HTMLValidator;
+    const resultsEl = document.getElementById('results');
+    const summaryEl = document.getElementById('summary');
+
+    let passed = 0;
+    let failed = 0;
+
+    function assert(name, fn) {
+      const el = document.createElement('div');
+      el.className = 'test-case';
+      try {
+        const result = fn();
+        if (result === true) {
+          el.classList.add('pass');
+          el.innerHTML = `<h3>${name}</h3><span class="result pass">✓ PASS</span>`;
+          passed++;
+        } else {
+          el.classList.add('fail');
+          el.innerHTML = `<h3>${name}</h3><span class="result fail">✗ FAIL</span><div class="details">${result}</div>`;
+          failed++;
+        }
+      } catch (e) {
+        el.classList.add('fail');
+        el.innerHTML = `<h3>${name}</h3><span class="result fail">✗ ERROR</span><div class="details">${e.message}</div>`;
+        failed++;
+      }
+      resultsEl.appendChild(el);
+    }
+
+    function hasIssue(issues, rule, type) {
+      return issues.some(i => i.rule === rule && (!type || i.type === type));
+    }
+
+    function countIssues(issues, type) {
+      return issues.filter(i => i.type === type).length;
+    }
+
+    // ─── Test ───
+
+    // 1. HTML valido non produce errori
+    assert('HTML valido → nessun errore', () => {
+      const issues = V.validate('<p>Ciao</p>');
+      if (issues.length === 0) return true;
+      return `Attesi 0 problemi, trovati ${issues.length}: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 2. HTML valido più complesso
+    assert('HTML complesso valido → nessun errore', () => {
+      const html = '<!DOCTYPE html>\n<html lang="it">\n<head><title>Test</title></head>\n<body><h1>Ciao</h1><p>Testo</p></body>\n</html>';
+      const issues = V.validate(html);
+      const realIssues = issues.filter(i => i.rule !== 'empty-input');
+      if (realIssues.length === 0) return true;
+      return `Attesi 0 problemi, trovati ${realIssues.length}`;
+    });
+
+    // 3. Tag non chiuso: <div> senza </div>
+    assert('Tag <div> non chiuso → errore "unclosed-tag"', () => {
+      const issues = V.validate('<div><p>Ciao</div>');
+      const unclosed = issues.filter(i => i.rule === 'unclosed-tag' || i.rule === 'unclosed-tag-nested');
+      if (unclosed.length >= 1) return true;
+      return `Atteso almeno 1 tag non chiuso, trovati: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 4. Tag non chiuso riporta riga e colonna
+    assert('Unclosed tag ha line/col', () => {
+      const issues = V.validate('<div>\n<p>Ciao</div>');
+      const unclosed = issues.find(i => i.rule === 'unclosed-tag' || i.rule === 'unclosed-tag-nested');
+      if (!unclosed) return 'Nessun unclosed tag trovato';
+      if (unclosed.line >= 1 && unclosed.col >= 1) return true;
+      return `line=${unclosed.line}, col=${unclosed.col} non validi`;
+    });
+
+    // 5. Attributo errato: scr invece di src
+    assert('img con scr="foto.jpg" → errore typo "scr"', () => {
+      const issues = V.validate('<img scr="foto.jpg" alt="Foto">');
+      const typoIssue = issues.find(i => i.rule === 'typo-attribute');
+      if (!typoIssue) return `Nessun typo trovato. Issues: ${issues.map(i => i.rule).join(', ')}`;
+      if (typoIssue.suggestion.toLowerCase().includes('src')) return true;
+      return `Il suggerimento non menziona "src": ${typoIssue.suggestion}`;
+    });
+
+    // 6. Attributo sconosciuto (non un typo comune)
+    assert('Attributo inventato → warning "unknown-attribute"', () => {
+      const issues = V.validate('<p foo="bar">Ciao</p>');
+      const hasUnknown = issues.some(i => i.rule === 'unknown-attribute' || i.rule === 'unknown-attribute-close');
+      if (hasUnknown) return true;
+      return `Issues: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 7. Missing alt su img
+    assert('img senza alt → warning "missing-alt"', () => {
+      const issues = V.validate('<img src="foto.jpg">');
+      if (hasIssue(issues, 'missing-alt')) return true;
+      return `Issues: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 8. Missing src su img
+    assert('img senza src → errore "missing-src"', () => {
+      const issues = V.validate('<img alt="Foto">');
+      if (hasIssue(issues, 'missing-src', 'error')) return true;
+      return `Issues: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 9. Orphan closing tag
+    assert('</div> senza apertura → warning orphan', () => {
+      const issues = V.validate('</div>');
+      if (hasIssue(issues, 'orphan-closing-tag')) return true;
+      return `Issues: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 10. Input vuoto
+    assert('Input vuoto → info "empty-input"', () => {
+      const issues = V.validate('');
+      if (hasIssue(issues, 'empty-input', 'info')) return true;
+      return `Issues: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 11. Void element non segnalato
+    assert('Void elements (<br>, <img>) non richiedono chiusura', () => {
+      const issues = V.validate('<br><img src="x.jpg" alt="x"><hr><input type="text">');
+      const unclosed = issues.filter(i => i.rule.includes('unclosed'));
+      if (unclosed.length === 0) return true;
+      return `Void element segnalato erroneamente: ${unclosed.map(i => `${i.rule}: ${i.message}`).join('; ')}`;
+    });
+
+    // 12. a senza href
+    assert('<a> senza href → warning "missing-href"', () => {
+      const issues = V.validate('<a>Clicca</a>');
+      if (hasIssue(issues, 'missing-href')) return true;
+      return `Issues: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 13. hrer typo su anchor
+    assert('<a hrer="..."> → typo attribute', () => {
+      const issues = V.validate('<a hrer="https://example.com">Link</a>');
+      const typo = issues.find(i => i.rule === 'typo-attribute');
+      if (typo && typo.suggestion.toLowerCase().includes('href')) return true;
+      return `Issues: ${issues.map(i => `${i.rule}: ${i.suggestion}`).join(' | ')}`;
+    });
+
+    // 14. Tag multipli non chiusi
+    assert('Multipli tag non chiusi annidati', () => {
+      const issues = V.validate('<div><section><p>Ciao</section></div>');
+      const unclosed = issues.filter(i => i.rule === 'unclosed-tag' || i.rule === 'unclosed-tag-nested');
+      if (unclosed.length >= 1) return true;
+      return `Issues: ${issues.map(i => i.rule).join(', ')}`;
+    });
+
+    // 15. Codice con commenti non deve rompere il parser
+    assert('Commenti HTML non causano falsi positivi', () => {
+      const issues = V.validate('<!-- <div>commento</div> --><p>Valido</p>');
+      const real = issues.filter(i => i.rule !== 'empty-input');
+      if (real.length === 0) return true;
+      return `Issues inattesi: ${real.map(i => i.rule).join(', ')}`;
+    });
+
+    // ─── Riepilogo ───
+    const total = passed + failed;
+    summaryEl.textContent = `${passed}/${total} test passati` + (failed > 0 ? ` — ${failed} falliti` : ' ✅');
+    summaryEl.style.color = failed > 0 ? 'var(--fail)' : 'var(--ok)';
+    summaryEl.style.fontWeight = '700';
+  </script>
+</body>
+</html>
